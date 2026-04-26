@@ -1,0 +1,196 @@
+📁 Project Structure
+quiz-game/
+  server/
+    server.js
+  client/
+    index.html
+    app.js
+⚙️ 1. Backend (Node.js)
+Install:
+cd server
+npm init -y
+npm install express socket.io cors
+server.js
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
+
+// In-memory game storage
+let rooms = {};
+
+const questions = [
+  {
+    question: "What is 2 + 2?",
+    options: ["3", "4", "5", "6"],
+    answer: 1
+  },
+  {
+    question: "Capital of France?",
+    options: ["Berlin", "London", "Paris", "Rome"],
+    answer: 2
+  }
+];
+
+function generateRoomCode() {
+  return Math.random().toString(36).substring(2, 7).toUpperCase();
+}
+
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  socket.on("createRoom", (username, callback) => {
+    const code = generateRoomCode();
+    rooms[code] = {
+      players: {},
+      questionIndex: 0
+    };
+
+    rooms[code].players[socket.id] = {
+      username,
+      score: 0
+    };
+
+    socket.join(code);
+    callback(code);
+  });
+
+  socket.on("joinRoom", ({ code, username }, callback) => {
+    const room = rooms[code];
+    if (!room) return callback("Room not found");
+
+    room.players[socket.id] = {
+      username,
+      score: 0
+    };
+
+    socket.join(code);
+    callback(null);
+    io.to(code).emit("updatePlayers", room.players);
+  });
+
+  socket.on("startGame", (code) => {
+    const room = rooms[code];
+    if (!room) return;
+
+    sendQuestion(code);
+  });
+
+  socket.on("answer", ({ code, answerIndex }) => {
+    const room = rooms[code];
+    if (!room) return;
+
+    const q = questions[room.questionIndex];
+    if (q.answer === answerIndex) {
+      room.players[socket.id].score += 10;
+    }
+
+    room.questionIndex++;
+
+    if (room.questionIndex < questions.length) {
+      sendQuestion(code);
+    } else {
+      io.to(code).emit("gameOver", room.players);
+    }
+  });
+
+  function sendQuestion(code) {
+    const room = rooms[code];
+    const q = questions[room.questionIndex];
+
+    io.to(code).emit("question", {
+      question: q.question,
+      options: q.options
+    });
+  }
+
+  socket.on("disconnect", () => {
+    for (const code in rooms) {
+      delete rooms[code]?.players[socket.id];
+    }
+  });
+});
+
+server.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
+🌐 2. Frontend (Simple HTML)
+index.html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Quiz Game</title>
+</head>
+<body>
+  <h1>Quiz Game</h1>
+
+  <input id="name" placeholder="Enter name" />
+  <button onclick="createRoom()">Create Room</button>
+
+  <input id="roomCode" placeholder="Room Code" />
+  <button onclick="joinRoom()">Join Room</button>
+
+  <div id="game"></div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+app.js
+const socket = io("http://localhost:3000");
+
+let currentRoom;
+
+function createRoom() {
+  const name = document.getElementById("name").value;
+
+  socket.emit("createRoom", name, (code) => {
+    currentRoom = code;
+    alert("Room Code: " + code);
+  });
+}
+
+function joinRoom() {
+  const name = document.getElementById("name").value;
+  const code = document.getElementById("roomCode").value;
+
+  socket.emit("joinRoom", { code, username: name }, (err) => {
+    if (err) alert(err);
+    else currentRoom = code;
+  });
+}
+
+socket.on("question", (data) => {
+  const gameDiv = document.getElementById("game");
+
+  gameDiv.innerHTML = `<h2>${data.question}</h2>`;
+
+  data.options.forEach((opt, i) => {
+    const btn = document.createElement("button");
+    btn.innerText = opt;
+    btn.onclick = () => {
+      socket.emit("answer", {
+        code: currentRoom,
+        answerIndex: i
+      });
+    };
+    gameDiv.appendChild(btn);
+  });
+});
+
+socket.on("gameOver", (players) => {
+  let html = "<h2>Game Over</h2>";
+  for (let id in players) {
+    html += `<p>${players[id].username}: ${players[id].score}</p>`;
+  }
+  document.getElementById("game").innerHTML = html;
+}); 
+node server.js
